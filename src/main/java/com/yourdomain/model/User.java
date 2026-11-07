@@ -9,7 +9,7 @@ public record User(int id, String username, String password, String roles, Strin
     public static final String ROLE_CAPTAIN = "Boat Captain";
     public static final String ROLE_CLERK = "Port Clerk (Encoder)";
     public static final String STATUS_PENDING = "PENDING";
-    public static final String STATUS_ACTIVE = "ACTIVE";
+    public static final String STATUS_APPROVED = "APPROVED";
 
     /** Creates a new, not-yet-saved user (id 0) with the given role and status. */
     public static User newUser(String username, String password, String roles, String status) {

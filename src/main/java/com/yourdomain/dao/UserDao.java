@@ -56,36 +56,61 @@ public class UserDao {
         }
     }
 
-    /** All accounts still waiting for approval. */
-    public List<User> findPending() {
-        String sql = "SELECT id, username, password, roles, status FROM users WHERE status = ? ORDER BY id";
-        List<User> pending = new ArrayList<>();
+    /** True if a Boat Owner / Administrator account already exists (only one is allowed). */
+    public boolean adminExists() {
+        String sql = "SELECT 1 FROM users WHERE roles = ? LIMIT 1";
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, User.STATUS_PENDING);
+            ps.setString(1, User.ROLE_OWNER_ADMIN);
             try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    pending.add(new User(rs.getInt("id"), rs.getString("username"),
-                            rs.getString("password"), rs.getString("roles"), rs.getString("status")));
-                }
+                return rs.next();
             }
-            return pending;
         } catch (SQLException e) {
-            throw new IllegalStateException("Could not load pending accounts: " + e.getMessage(), e);
+            throw new IllegalStateException("Admin lookup failed: " + e.getMessage(), e);
         }
     }
 
-    /** Sets a PENDING account to ACTIVE. Returns true if a row was updated. */
-    public boolean approve(int id) {
-        String sql = "UPDATE users SET status = ? WHERE id = ? AND status = ?";
+    /** Every registered account, regardless of role or status. */
+    public List<User> getAllUsers() {
+        String sql = "SELECT id, username, password, roles, status FROM users ORDER BY id";
+        return queryUsers(sql, null);
+    }
+
+    /** All accounts (any role) whose status is PENDING. */
+    public List<User> getPendingUsers() {
+        String sql = "SELECT id, username, password, roles, status FROM users WHERE status = ? ORDER BY id";
+        return queryUsers(sql, User.STATUS_PENDING);
+    }
+
+    /** Sets the account's status from PENDING to APPROVED. Returns true if a row was updated. */
+    public boolean approveUser(int userId) {
+        String sql = "UPDATE users SET status = 'APPROVED' WHERE id = ?";
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, User.STATUS_ACTIVE);
-            ps.setInt(2, id);
-            ps.setString(3, User.STATUS_PENDING);
+            ps.setInt(1, userId);
             return ps.executeUpdate() > 0;
         } catch (SQLException e) {
             throw new IllegalStateException("Approval failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** Runs a user SELECT with an optional single String parameter and maps the rows. */
+    private List<User> queryUsers(String sql, String param) {
+        List<User> users = new ArrayList<>();
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            if (param != null) {
+                ps.setString(1, param);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    users.add(new User(rs.getInt("id"), rs.getString("username"),
+                            rs.getString("password"), rs.getString("roles"), rs.getString("status")));
+                }
+            }
+            return users;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not load users: " + e.getMessage(), e);
         }
     }
 

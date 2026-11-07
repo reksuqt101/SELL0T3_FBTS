@@ -3,6 +3,8 @@ package com.yourdomain.ui;
 import com.yourdomain.dao.UserDao;
 import com.yourdomain.model.User;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Scanner;
 
@@ -70,14 +72,15 @@ public class Authentication {
         String status;
         if (userDao.countUsers() == 0) {
             role = User.ROLE_OWNER_ADMIN;
-            status = User.STATUS_ACTIVE;
+            status = User.STATUS_APPROVED;
             System.out.println("First account detected: you are registered as " + role + ".");
         } else {
             role = chooseRole();
             if (role == null) {
                 return;
             }
-            status = User.STATUS_PENDING;
+            // If no administrator exists yet, nobody could approve this account, so approve it directly.
+            status = User.ROLE_OWNER_ADMIN.equals(role) ? User.STATUS_APPROVED : User.STATUS_PENDING;
         }
 
         User newUser = User.newUser(username, password, role, status);
@@ -91,21 +94,33 @@ public class Authentication {
         }
     }
 
+    /**
+     * Shows the roles a new user may pick. Only one Boat Owner / Administrator is allowed,
+     * so that option is hidden once an administrator account exists.
+     */
     private String chooseRole() {
+        List<String> roles = new ArrayList<>();
+        if (!userDao.adminExists()) {
+            roles.add(User.ROLE_OWNER_ADMIN);
+        }
+        roles.add(User.ROLE_CAPTAIN);
+        roles.add(User.ROLE_CLERK);
+
         System.out.println("Select role:");
-        System.out.println("1. " + User.ROLE_OWNER_ADMIN);
-        System.out.println("2. " + User.ROLE_CAPTAIN);
-        System.out.println("3. " + User.ROLE_CLERK);
+        for (int i = 0; i < roles.size(); i++) {
+            System.out.println((i + 1) + ". " + roles.get(i));
+        }
         System.out.print("Choose role: ");
-        return switch (scanner.nextLine().trim()) {
-            case "1" -> User.ROLE_OWNER_ADMIN;
-            case "2" -> User.ROLE_CAPTAIN;
-            case "3" -> User.ROLE_CLERK;
-            default -> {
-                System.out.println("Invalid role. Registration cancelled.");
-                yield null;
+        try {
+            int choice = Integer.parseInt(scanner.nextLine().trim());
+            if (choice >= 1 && choice <= roles.size()) {
+                return roles.get(choice - 1);
             }
-        };
+        } catch (NumberFormatException ignored) {
+            // falls through to the invalid message
+        }
+        System.out.println("Invalid role. Registration cancelled.");
+        return null;
     }
 
     private void login() {
