@@ -14,6 +14,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -58,7 +59,7 @@ public class UserDao {
 
     /** True if a Boat Owner / Administrator account already exists (only one is allowed). */
     public boolean adminExists() {
-        String sql = "SELECT 1 FROM users WHERE roles = ? LIMIT 1";
+        String sql = "SELECT 1 FROM users WHERE UPPER(roles) = UPPER(?) LIMIT 1";
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, User.ROLE_OWNER_ADMIN);
@@ -91,6 +92,23 @@ public class UserDao {
             return ps.executeUpdate() > 0;
         } catch (SQLException e) {
             throw new IllegalStateException("Approval failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Changes a user's role and status. Both values are converted to upper case before
+     * they are saved. Returns true if a row was updated.
+     */
+    public boolean updateUserRoleAndStatus(int userId, String newRole, String newStatus) {
+        String sql = "UPDATE users SET roles = ?, status = ? WHERE id = ?";
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, newRole.toUpperCase(Locale.ROOT));
+            ps.setString(2, newStatus.toUpperCase(Locale.ROOT));
+            ps.setInt(3, userId);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Update failed: " + e.getMessage(), e);
         }
     }
 

@@ -1,6 +1,7 @@
 package com.yourdomain.dao;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
@@ -15,16 +16,7 @@ public class DatabaseInitializer {
 
     public static void initialize() {
         String[] statements = {
-                """
-                CREATE TABLE IF NOT EXISTS users (
-                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT NOT NULL UNIQUE,
-                    password TEXT NOT NULL,
-                    roles    TEXT NOT NULL CHECK (roles IN
-                             ('Boat Owner / Administrator', 'Boat Captain', 'Port Clerk (Encoder)')),
-                    status   TEXT NOT NULL DEFAULT 'PENDING'
-                )
-                """,
+                usersTableSql("users"),
                 """
                 CREATE TABLE IF NOT EXISTS boats (
                     boat_id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,8 +69,62 @@ public class DatabaseInitializer {
             for (String sql : statements) {
                 stmt.execute(sql);
             }
+            upgradeUsersTableIfNeeded(conn);
         } catch (SQLException e) {
             throw new IllegalStateException("Could not initialize the database: " + e.getMessage(), e);
+        }
+    }
+
+    /** CREATE TABLE statement for the users table, with a case-insensitive role check. */
+    private static String usersTableSql(String tableName) {
+        return """
+                CREATE TABLE IF NOT EXISTS %s (
+                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE,
+                    password TEXT NOT NULL,
+                    roles    TEXT NOT NULL CHECK (UPPER(roles) IN
+                             ('BOAT OWNER / ADMINISTRATOR', 'BOAT CAPTAIN', 'PORT CLERK (ENCODER)')),
+                    status   TEXT NOT NULL DEFAULT 'PENDING'
+                )
+                """.formatted(tableName);
+    }
+
+    /**
+     * Older databases were created with a case-sensitive role check, which rejects
+     * upper-case roles. If the users table still has that check, rebuild it with the
+     * new check and keep all existing accounts.
+     */
+    private static void upgradeUsersTableIfNeeded(Connection conn) throws SQLException {
+        String existingSql = null;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(
+                     "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'")) {
+            if (rs.next()) {
+                existingSql = rs.getString(1);
+            }
+        }
+        if (existingSql == null || existingSql.toUpperCase().contains("UPPER(ROLES)")) {
+            return; // already up to date
+        }
+
+        try (Statement stmt = conn.createStatement()) {
+            // Other tables point at users(id), so foreign keys must be off while it is rebuilt.
+            stmt.execute("PRAGMA foreign_keys = OFF");
+            conn.setAutoCommit(false);
+            try {
+                stmt.execute(usersTableSql("users_new"));
+                stmt.execute("INSERT INTO users_new (id, username, password, roles, status) "
+                        + "SELECT id, username, password, roles, status FROM users");
+                stmt.execute("DROP TABLE users");
+                stmt.execute("ALTER TABLE users_new RENAME TO users");
+                conn.commit();
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(true);
+                stmt.execute("PRAGMA foreign_keys = ON");
+            }
         }
     }
 }

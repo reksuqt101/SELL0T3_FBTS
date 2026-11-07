@@ -80,7 +80,7 @@ public class Authentication {
                 return;
             }
             // If no administrator exists yet, nobody could approve this account, so approve it directly.
-            status = User.ROLE_OWNER_ADMIN.equals(role) ? User.STATUS_APPROVED : User.STATUS_PENDING;
+            status = User.ROLE_OWNER_ADMIN.equalsIgnoreCase(role) ? User.STATUS_APPROVED : User.STATUS_PENDING;
         }
 
         User newUser = User.newUser(username, password, role, status);
@@ -145,11 +145,16 @@ public class Authentication {
 
     /** Sends the logged-in user to the menu that matches their role. */
     private void routeToMenu(User user) {
-        switch (user.roles()) {
-            case User.ROLE_OWNER_ADMIN -> new AdminMenu(scanner, userDao, user).show();
-            case User.ROLE_CAPTAIN -> new CaptainMenu(scanner, userDao, user).show();
-            case User.ROLE_CLERK -> new ClerkMenu(scanner, userDao, user).show();
-            default -> System.out.println("Unknown role: " + user.roles());
+        // Roles may be stored in upper case after an admin update, so compare ignoring case.
+        String role = user.roles();
+        if (User.ROLE_OWNER_ADMIN.equalsIgnoreCase(role)) {
+            new AdminMenu(scanner, userDao, user).show();
+        } else if (User.ROLE_CAPTAIN.equalsIgnoreCase(role)) {
+            new CaptainMenu(scanner, userDao, user).show();
+        } else if (User.ROLE_CLERK.equalsIgnoreCase(role)) {
+            new ClerkMenu(scanner, userDao, user).show();
+        } else {
+            System.out.println("Unknown role: " + role);
         }
     }
 
