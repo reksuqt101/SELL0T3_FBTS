@@ -1,8 +1,10 @@
 package com.yourdomain.ui;
 
 import com.yourdomain.dao.ActivityLogDao;
+import com.yourdomain.dao.BoatDao;
 import com.yourdomain.dao.UserDao;
 import com.yourdomain.model.ActivityLog;
+import com.yourdomain.model.Boat;
 import com.yourdomain.model.User;
 
 import java.util.ArrayList;
@@ -33,6 +35,7 @@ public class AdminMenu {
     private final UserDao userDao;
     private final ActivityLogDao activityLogDao;
     private final User user;
+    private final BoatDao boatDao = new BoatDao();
 
     public AdminMenu(Scanner scanner, UserDao userDao, ActivityLogDao activityLogDao, User user) {
         this.scanner = scanner;
@@ -54,8 +57,9 @@ public class AdminMenu {
             System.out.println("3. View pending registrations");
             System.out.println("4. Approve user account");
             System.out.println("5. Update user role and status");
-            System.out.println("6. View system audit logs");
-            System.out.println("7. Logout");
+            System.out.println("6. Manage boats");
+            System.out.println("7. View system audit logs");
+            System.out.println("8. Logout");
             System.out.print("Choose an option: ");
 
             switch (scanner.nextLine().trim()) {
@@ -64,12 +68,13 @@ public class AdminMenu {
                 case "3" -> viewPendingUsers();
                 case "4" -> approveUserAccount();
                 case "5" -> updateUserRoleAndStatus();
-                case "6" -> auditLogMenu();
-                case "7" -> {
+                case "6" -> manageBoats();
+                case "7" -> auditLogMenu();
+                case "8" -> {
                     System.out.println("You have been logged out.");
                     loggedIn = false;
                 }
-                default -> System.out.println("Invalid option. Please enter 1 to 7.");
+                default -> System.out.println("Invalid option. Please enter 1 to 8.");
             }
         }
     }
@@ -119,10 +124,9 @@ public class AdminMenu {
                 continue;
             }
 
-            if (userDao.approveUser(id)) {
+            // UserDao.approveUser records USER_APPROVED in the audit log.
+            if (userDao.approveUser(user.id(), id)) {
                 System.out.println("User ID " + id + " has been approved.");
-                activityLogDao.logAction(user.id(), ActivityLog.USER_APPROVED,
-                        "Admin [" + user.id() + "] approved account for User ID " + id);
             } else {
                 System.out.println("Approval failed. Please try again.");
             }
@@ -180,12 +184,10 @@ public class AdminMenu {
             return;
         }
 
-        if (userDao.updateUserRoleAndStatus(target.id(), newRole, newStatus)) {
+        // UserDao.updateUserRoleAndStatus records USER_UPDATED in the audit log.
+        if (userDao.updateUserRoleAndStatus(user.id(), target.id(), newRole, newStatus)) {
             System.out.println("User ID " + target.id() + " updated: role = " + newRole.toUpperCase()
                     + ", status = " + newStatus.toUpperCase() + ".");
-            activityLogDao.logAction(user.id(), ActivityLog.USER_UPDATED,
-                    "Admin [" + user.id() + "] changed role of User " + target.id() + " to "
-                            + newRole.toUpperCase() + " and status to " + newStatus.toUpperCase());
         } else {
             System.out.println("Update failed. No changes were made.");
         }
@@ -249,6 +251,122 @@ public class AdminMenu {
                 }
             }
             System.out.println("Invalid status. Please enter APPROVED or PENDING.");
+        }
+    }
+
+    // ---- boats ----
+
+    /** Submenu to register boats and list them. Enter 0 to go back. */
+    private void manageBoats() {
+        boolean inBoatMenu = true;
+        while (inBoatMenu) {
+            System.out.println();
+            System.out.println("===== MANAGE BOATS =====");
+            System.out.println("1. View all boats");
+            System.out.println("2. Register a new boat");
+            System.out.println("0. Back");
+            System.out.print("Choose an option: ");
+
+            switch (scanner.nextLine().trim()) {
+                case "1" -> {
+                    List<Boat> boats = boatDao.getAllBoats();
+                    if (boats.isEmpty()) {
+                        System.out.println("No boats registered yet.");
+                    } else {
+                        printBoatTable(boats);
+                    }
+                }
+                case "2" -> registerBoat();
+                case "0" -> inBoatMenu = false;
+                default -> System.out.println("Invalid option. Please enter 1, 2 or 0.");
+            }
+        }
+    }
+
+    private void registerBoat() {
+        System.out.println();
+        System.out.println("--- Register a New Boat ---");
+        String name = readText("Boat name (0 to cancel): ");
+        if (name == null) {
+            System.out.println("Registration cancelled.");
+            return;
+        }
+        String registration = readText("Registration number (0 to cancel): ");
+        if (registration == null) {
+            System.out.println("Registration cancelled.");
+            return;
+        }
+        String type = readText("Boat type, e.g. Bangka (0 to cancel): ");
+        if (type == null) {
+            System.out.println("Registration cancelled.");
+            return;
+        }
+        Double capacity = readPositiveDouble("Capacity in tons (0 to cancel): ");
+        if (capacity == null) {
+            System.out.println("Registration cancelled.");
+            return;
+        }
+
+        Boat boat = new Boat(0, name, registration, type, capacity, Boat.STATUS_AVAILABLE);
+        if (boatDao.addBoat(user.id(), boat)) {
+            System.out.println("Boat " + name + " registered and set to " + Boat.STATUS_AVAILABLE + ".");
+        } else {
+            System.out.println("That registration number is already used.");
+        }
+    }
+
+    // ---- boat helpers ----
+
+    private static final String BOAT_ROW = "| %-5s | %-20s | %-16s | %-12s | %-10s | %-10s |%n";
+    private static final String BOAT_BORDER =
+            "+-------+----------------------+------------------+--------------+------------+------------+";
+
+    private void printBoatTable(List<Boat> boats) {
+        System.out.println(BOAT_BORDER);
+        System.out.printf(BOAT_ROW, "ID", "Name", "Registration No.", "Type", "Capacity", "Status");
+        System.out.println(BOAT_BORDER);
+        for (Boat b : boats) {
+            System.out.printf(BOAT_ROW, b.boatId(), fit(b.boatName(), 20), fit(b.registrationNo(), 16),
+                    fit(b.boatType(), 12), String.format("%.1f", b.capacity()), fit(b.status(), 10));
+        }
+        System.out.println(BOAT_BORDER);
+        System.out.println("Total: " + boats.size());
+    }
+
+    /** Keeps asking until non-empty text is entered. Returns null if the person enters 0. */
+    private String readText(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String input = scanner.nextLine().trim();
+            if (input.equals("0")) {
+                return null;
+            }
+            if (input.isEmpty()) {
+                System.out.println("This field cannot be empty.");
+                continue;
+            }
+            return input;
+        }
+    }
+
+    /** Keeps asking until a number greater than 0 is entered. Returns null if the person enters 0. */
+    private Double readPositiveDouble(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            String input = scanner.nextLine().trim();
+            if (input.equals("0")) {
+                return null;
+            }
+            try {
+                double value = Double.parseDouble(input);
+                if (Double.isNaN(value) || Double.isInfinite(value) || value <= 0) {
+                    System.out.println("Please enter a number greater than 0.");
+                    continue;
+                }
+                return value;
+            } catch (NumberFormatException e) {
+                System.out.println("Invalid input. Please enter a number.");
+            }
         }
     }
 

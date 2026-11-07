@@ -1,5 +1,6 @@
 package com.yourdomain.dao;
 
+import com.yourdomain.model.ActivityLog;
 import com.yourdomain.model.User;
 
 import javax.crypto.SecretKeyFactory;
@@ -25,6 +26,8 @@ public class UserDao {
 
     private static final int ITERATIONS = 65_536;
     private static final int KEY_LENGTH = 256;
+
+    private final ActivityLogDao activityLogDao = new ActivityLogDao();
 
     /** Saves a new user. Returns false if the username is already taken. */
     public boolean register(User user) {
@@ -83,33 +86,52 @@ public class UserDao {
         return queryUsers(sql, User.STATUS_PENDING);
     }
 
-    /** Sets the account's status from PENDING to APPROVED. Returns true if a row was updated. */
-    public boolean approveUser(int userId) {
+    /**
+     * Sets the target account's status to APPROVED and logs USER_APPROVED:
+     * "Admin [1] approved User [5]". Returns true if a row was updated.
+     */
+    public boolean approveUser(int adminId, int targetUserId) {
         String sql = "UPDATE users SET status = 'APPROVED' WHERE id = ?";
+        boolean updated;
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, userId);
-            return ps.executeUpdate() > 0;
+            ps.setInt(1, targetUserId);
+            updated = ps.executeUpdate() > 0;
         } catch (SQLException e) {
             throw new IllegalStateException("Approval failed: " + e.getMessage(), e);
         }
+        if (updated) {
+            activityLogDao.logAction(adminId, ActivityLog.USER_APPROVED,
+                    "Admin [" + adminId + "] approved User [" + targetUserId + "]");
+        }
+        return updated;
     }
 
     /**
-     * Changes a user's role and status. Both values are converted to upper case before
-     * they are saved. Returns true if a row was updated.
+     * Changes a user's role and status (saved in upper case) and logs USER_UPDATED:
+     * "Admin [1] changed User [5] role to BOAT CAPTAIN, status to APPROVED".
+     * Returns true if a row was updated.
      */
-    public boolean updateUserRoleAndStatus(int userId, String newRole, String newStatus) {
+    public boolean updateUserRoleAndStatus(int adminId, int targetUserId, String newRole, String newStatus) {
+        String role = newRole.toUpperCase(Locale.ROOT);
+        String status = newStatus.toUpperCase(Locale.ROOT);
         String sql = "UPDATE users SET roles = ?, status = ? WHERE id = ?";
+        boolean updated;
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, newRole.toUpperCase(Locale.ROOT));
-            ps.setString(2, newStatus.toUpperCase(Locale.ROOT));
-            ps.setInt(3, userId);
-            return ps.executeUpdate() > 0;
+            ps.setString(1, role);
+            ps.setString(2, status);
+            ps.setInt(3, targetUserId);
+            updated = ps.executeUpdate() > 0;
         } catch (SQLException e) {
             throw new IllegalStateException("Update failed: " + e.getMessage(), e);
         }
+        if (updated) {
+            activityLogDao.logAction(adminId, ActivityLog.USER_UPDATED,
+                    "Admin [" + adminId + "] changed User [" + targetUserId + "] role to " + role
+                            + ", status to " + status);
+        }
+        return updated;
     }
 
     /** Runs a user SELECT with an optional single String parameter and maps the rows. */
