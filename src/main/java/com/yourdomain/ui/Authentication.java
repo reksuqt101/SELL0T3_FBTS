@@ -1,5 +1,6 @@
 package com.yourdomain.ui;
 
+import com.yourdomain.dao.ActivityLogDao;
 import com.yourdomain.dao.UserDao;
 import com.yourdomain.model.User;
 
@@ -16,10 +17,12 @@ public class Authentication {
 
     private final Scanner scanner;
     private final UserDao userDao;
+    private final ActivityLogDao activityLogDao;
 
-    public Authentication(Scanner scanner, UserDao userDao) {
+    public Authentication(Scanner scanner, UserDao userDao, ActivityLogDao activityLogDao) {
         this.scanner = scanner;
         this.userDao = userDao;
+        this.activityLogDao = activityLogDao;
     }
 
     public void start() {
@@ -148,7 +151,7 @@ public class Authentication {
         // Roles may be stored in upper case after an admin update, so compare ignoring case.
         String role = user.roles();
         if (User.ROLE_OWNER_ADMIN.equalsIgnoreCase(role)) {
-            new AdminMenu(scanner, userDao, user).show();
+            new AdminMenu(scanner, userDao, activityLogDao, user).show();
         } else if (User.ROLE_CAPTAIN.equalsIgnoreCase(role)) {
             new CaptainMenu(scanner, userDao, user).show();
         } else if (User.ROLE_CLERK.equalsIgnoreCase(role)) {

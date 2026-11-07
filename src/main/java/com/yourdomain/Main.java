@@ -1,5 +1,6 @@
 package com.yourdomain;
 
+import com.yourdomain.dao.ActivityLogDao;
 import com.yourdomain.dao.DatabaseInitializer;
 import com.yourdomain.dao.UserDao;
 import com.yourdomain.ui.Authentication;
@@ -17,7 +18,8 @@ public class Main {
 
         try (Scanner scanner = new Scanner(System.in)) {
             UserDao userDao = new UserDao();
-            new Authentication(scanner, userDao).start();
+            ActivityLogDao activityLogDao = new ActivityLogDao();
+            new Authentication(scanner, userDao, activityLogDao).start();
         }
     }
 }

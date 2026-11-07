@@ -1,8 +1,11 @@
 package com.yourdomain.ui;
 
+import com.yourdomain.dao.ActivityLogDao;
 import com.yourdomain.dao.UserDao;
+import com.yourdomain.model.ActivityLog;
 import com.yourdomain.model.User;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Scanner;
@@ -17,6 +20,10 @@ public class AdminMenu {
     private static final String ROW_FORMAT = "| %-5s | %-15s | %-28s | %-10s |%n";
     private static final String BORDER = "+-------+-----------------+------------------------------+------------+";
 
+    // Audit log columns: ID, User ID, Action, Description, Timestamp.
+    private static final String LOG_ROW_FORMAT = "%-5s | %-8s | %-18s | %-35s | %-20s%n";
+    private static final String LOG_BORDER = "-".repeat(5 + 3 + 8 + 3 + 18 + 3 + 35 + 3 + 20);
+
     private static final List<String> VALID_ROLES =
             List.of(User.ROLE_OWNER_ADMIN, User.ROLE_CAPTAIN, User.ROLE_CLERK);
     private static final List<String> VALID_STATUSES =
@@ -24,11 +31,13 @@ public class AdminMenu {
 
     private final Scanner scanner;
     private final UserDao userDao;
+    private final ActivityLogDao activityLogDao;
     private final User user;
 
-    public AdminMenu(Scanner scanner, UserDao userDao, User user) {
+    public AdminMenu(Scanner scanner, UserDao userDao, ActivityLogDao activityLogDao, User user) {
         this.scanner = scanner;
         this.userDao = userDao;
+        this.activityLogDao = activityLogDao;
         this.user = user;
     }
 
@@ -45,7 +54,8 @@ public class AdminMenu {
             System.out.println("3. View pending registrations");
             System.out.println("4. Approve user account");
             System.out.println("5. Update user role and status");
-            System.out.println("6. Logout");
+            System.out.println("6. View system audit logs");
+            System.out.println("7. Logout");
             System.out.print("Choose an option: ");
 
             switch (scanner.nextLine().trim()) {
@@ -54,11 +64,12 @@ public class AdminMenu {
                 case "3" -> viewPendingUsers();
                 case "4" -> approveUserAccount();
                 case "5" -> updateUserRoleAndStatus();
-                case "6" -> {
+                case "6" -> auditLogMenu();
+                case "7" -> {
                     System.out.println("You have been logged out.");
                     loggedIn = false;
                 }
-                default -> System.out.println("Invalid option. Please enter 1 to 6.");
+                default -> System.out.println("Invalid option. Please enter 1 to 7.");
             }
         }
     }
@@ -110,6 +121,8 @@ public class AdminMenu {
 
             if (userDao.approveUser(id)) {
                 System.out.println("User ID " + id + " has been approved.");
+                activityLogDao.logAction(user.id(), ActivityLog.USER_APPROVED,
+                        "Admin [" + user.id() + "] approved account for User ID " + id);
             } else {
                 System.out.println("Approval failed. Please try again.");
             }
@@ -170,6 +183,9 @@ public class AdminMenu {
         if (userDao.updateUserRoleAndStatus(target.id(), newRole, newStatus)) {
             System.out.println("User ID " + target.id() + " updated: role = " + newRole.toUpperCase()
                     + ", status = " + newStatus.toUpperCase() + ".");
+            activityLogDao.logAction(user.id(), ActivityLog.USER_UPDATED,
+                    "Admin [" + user.id() + "] changed role of User " + target.id() + " to "
+                            + newRole.toUpperCase() + " and status to " + newStatus.toUpperCase());
         } else {
             System.out.println("Update failed. No changes were made.");
         }
@@ -234,6 +250,105 @@ public class AdminMenu {
             }
             System.out.println("Invalid status. Please enter APPROVED or PENDING.");
         }
+    }
+
+    // ---- audit logs ----
+
+    /** Submenu for the audit trail: view all, filter by user, or clear. Enter 0 to go back. */
+    private void auditLogMenu() {
+        boolean inAuditMenu = true;
+        while (inAuditMenu) {
+            System.out.println();
+            System.out.println("===== SYSTEM AUDIT LOGS =====");
+            System.out.println("1. View all system logs");
+            System.out.println("2. Filter logs by user ID");
+            System.out.println("3. Clear all logs");
+            System.out.println("0. Back");
+            System.out.print("Choose an option: ");
+
+            switch (scanner.nextLine().trim()) {
+                case "1" -> printLogTable(activityLogDao.getAllLogs());
+                case "2" -> filterLogsByUser();
+                case "3" -> clearLogs();
+                case "0" -> inAuditMenu = false;
+                default -> System.out.println("Invalid option. Please enter 1, 2, 3 or 0.");
+            }
+        }
+    }
+
+    private void filterLogsByUser() {
+        int userId = readIntInput("Enter the User ID to filter by (0 to cancel): ");
+        if (userId == 0) {
+            System.out.println("Filter cancelled.");
+            return;
+        }
+        List<ActivityLog> logs = activityLogDao.getLogsByUserId(userId);
+        if (logs.isEmpty()) {
+            System.out.println("No logs found for User ID " + userId + ".");
+            return;
+        }
+        printLogTable(logs);
+    }
+
+    /** Deletes all logs, but only after the admin types YES. The clearing itself is logged. */
+    private void clearLogs() {
+        System.out.println("WARNING: This permanently deletes every audit log entry.");
+        System.out.print("Type YES to confirm (anything else cancels): ");
+        if (!scanner.nextLine().trim().equals("YES")) {
+            System.out.println("Clear cancelled. No logs were deleted.");
+            return;
+        }
+        int removed = activityLogDao.clearLogs();
+        System.out.println(removed + " log entries deleted.");
+        activityLogDao.logAction(user.id(), ActivityLog.LOGS_CLEARED,
+                "Admin [" + user.id() + "] cleared " + removed + " log entries");
+    }
+
+    /** Splits text into lines of at most the given width, breaking at spaces where possible. */
+    private static List<String> wrap(String text, int width) {
+        List<String> lines = new ArrayList<>();
+        String rest = text == null ? "" : text.trim();
+        while (rest.length() > width) {
+            int cut = rest.lastIndexOf(' ', width);
+            if (cut <= 0) {
+                cut = width; // no space found, break the word
+            }
+            lines.add(rest.substring(0, cut).trim());
+            rest = rest.substring(cut).trim();
+        }
+        lines.add(rest);
+        return lines;
+    }
+
+    /** Prints log entries as an aligned table. Long descriptions continue on extra lines. */
+    private void printLogTable(List<ActivityLog> logs) {
+        System.out.println();
+        if (logs.isEmpty()) {
+            System.out.println("No logs recorded yet.");
+            return;
+        }
+        System.out.println(LOG_BORDER);
+        System.out.printf(LOG_ROW_FORMAT, "ID", "User ID", "Action", "Description", "Timestamp");
+        System.out.println(LOG_BORDER);
+        for (ActivityLog log : logs) {
+            List<String> descriptionLines = wrap(log.description(), 35);
+            System.out.printf(LOG_ROW_FORMAT, log.logId(), log.userId(),
+                    fit(log.actionType(), 18), descriptionLines.get(0), fit(log.timestamp(), 20));
+            // A long description continues on extra lines so no information is cut off.
+            for (int i = 1; i < descriptionLines.size(); i++) {
+                System.out.printf(LOG_ROW_FORMAT, "", "", "", descriptionLines.get(i), "");
+            }
+        }
+        System.out.println(LOG_BORDER);
+        System.out.println("Total: " + logs.size());
+    }
+
+    /** Cuts text to the column width, ending with "..." when it is shortened. */
+    private static String fit(String text, int width) {
+        if (text == null) {
+            return "";
+        }
+        return text.length() <= width ? text : text.substring(0, width - 3) + "...";
     }
 
     /** Prints any list of users as an aligned table with borders. */

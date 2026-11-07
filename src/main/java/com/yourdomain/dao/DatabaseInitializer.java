@@ -51,17 +51,7 @@ public class DatabaseInitializer {
                     FOREIGN KEY (trip_id) REFERENCES trips(trip_id)
                 )
                 """,
-                """
-                CREATE TABLE IF NOT EXISTS activity_logs (
-                    log_id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id        INTEGER NOT NULL,
-                    action         TEXT NOT NULL,
-                    table_affected TEXT,
-                    record_id      INTEGER,
-                    log_time       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id)
-                )
-                """
+                ACTIVITY_LOGS_SQL
         };
 
         try (Connection conn = DatabaseConnection.getConnection();
@@ -70,8 +60,59 @@ public class DatabaseInitializer {
                 stmt.execute(sql);
             }
             upgradeUsersTableIfNeeded(conn);
+            upgradeActivityLogsIfNeeded(conn);
         } catch (SQLException e) {
             throw new IllegalStateException("Could not initialize the database: " + e.getMessage(), e);
+        }
+    }
+
+    /** Audit trail table. Timestamps are stored in local time. */
+    private static final String ACTIVITY_LOGS_SQL = """
+            CREATE TABLE IF NOT EXISTS activity_logs (
+                log_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL,
+                action_type TEXT NOT NULL,
+                description TEXT NOT NULL,
+                timestamp   TIMESTAMP NOT NULL DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """;
+
+    /**
+     * Earlier versions created activity_logs with different columns (action, table_affected,
+     * record_id, log_time). If that old layout is found, move its rows into the new layout.
+     */
+    private static void upgradeActivityLogsIfNeeded(Connection conn) throws SQLException {
+        boolean hasNewLayout = false;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("PRAGMA table_info(activity_logs)")) {
+            while (rs.next()) {
+                if ("action_type".equalsIgnoreCase(rs.getString("name"))) {
+                    hasNewLayout = true;
+                }
+            }
+        }
+        if (hasNewLayout) {
+            return;
+        }
+
+        try (Statement stmt = conn.createStatement()) {
+            conn.setAutoCommit(false);
+            try {
+                stmt.execute("ALTER TABLE activity_logs RENAME TO activity_logs_old");
+                stmt.execute(ACTIVITY_LOGS_SQL);
+                stmt.execute("INSERT INTO activity_logs (log_id, user_id, action_type, description, timestamp) "
+                        + "SELECT log_id, user_id, action, "
+                        + "COALESCE(table_affected || ' #' || record_id, table_affected, action), log_time "
+                        + "FROM activity_logs_old");
+                stmt.execute("DROP TABLE activity_logs_old");
+                conn.commit();
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(true);
+            }
         }
     }
 
