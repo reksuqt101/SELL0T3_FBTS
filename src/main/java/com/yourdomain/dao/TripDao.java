@@ -11,10 +11,10 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * All SQL for the trips table. Every query uses a PreparedStatement.
+ * Trip actions are written to the audit log after the database change is saved.
  */
 public class TripDao {
 
@@ -24,32 +24,28 @@ public class TripDao {
     private final ActivityLogDao activityLogDao = new ActivityLogDao();
 
     /**
-     * Records a new trip as ONGOING and marks the boat as On Trip.
-     * Returns the new trip id, or -1 if the boat does not exist or is not Available.
+     * Records a new trip: marks the boat as On Trip and saves the trip as ONGOING.
+     * Returns the new trip ID, or -1 if the boat is not available.
      */
     public int recordTrip(int captainId, int boatId, String destination, double fuelCost) {
-        String boatName = null;
-        int tripId = -1;
+        int tripId;
         try (Connection conn = DatabaseConnection.getConnection()) {
             conn.setAutoCommit(false);
             try {
                 try (PreparedStatement ps = conn.prepareStatement(
-                        "SELECT boat_name FROM boats WHERE boat_id = ? AND UPPER(status) = 'AVAILABLE'")) {
-                    ps.setInt(1, boatId);
-                    try (ResultSet rs = ps.executeQuery()) {
-                        if (rs.next()) {
-                            boatName = rs.getString(1);
-                        }
+                        "UPDATE boats SET status = ? WHERE boat_id = ? AND status = ?")) {
+                    ps.setString(1, Boat.STATUS_ON_TRIP);
+                    ps.setInt(2, boatId);
+                    ps.setString(3, Boat.STATUS_AVAILABLE);
+                    if (ps.executeUpdate() == 0) {
+                        conn.rollback();
+                        return -1;
                     }
                 }
-                if (boatName == null) {
-                    conn.rollback();
-                    return -1;
-                }
-
-                String insert = "INSERT INTO trips (boat_id, captain_id, destination, departure_date, "
-                        + "fuel_cost, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, ?)";
-                try (PreparedStatement ps = conn.prepareStatement(insert, Statement.RETURN_GENERATED_KEYS)) {
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO trips (boat_id, captain_id, destination, departure_date, fuel_cost, status) "
+                                + "VALUES (?, ?, ?, datetime('now', 'localtime'), ?, ?)",
+                        Statement.RETURN_GENERATED_KEYS)) {
                     ps.setInt(1, boatId);
                     ps.setInt(2, captainId);
                     ps.setString(3, destination);
@@ -57,114 +53,91 @@ public class TripDao {
                     ps.setString(5, Trip.STATUS_ONGOING);
                     ps.executeUpdate();
                     try (ResultSet keys = ps.getGeneratedKeys()) {
-                        if (keys.next()) {
-                            tripId = keys.getInt(1);
-                        }
+                        keys.next();
+                        tripId = keys.getInt(1);
                     }
                 }
-                setBoatStatus(conn, boatId, Boat.STATUS_ON_TRIP);
                 conn.commit();
             } catch (SQLException e) {
                 conn.rollback();
                 throw e;
-            } finally {
-                conn.setAutoCommit(true);
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Could not record the trip: " + e.getMessage(), e);
         }
+        // Logged after the trip is saved, e.g. "Recorded Trip #3 to Palawan with Boat #1 - Fuel Cost: P1,500.00"
         activityLogDao.logAction(captainId, ActivityLog.TRIP_RECORDED,
-                "Recorded Trip #" + tripId + " - Boat: " + boatName + ", Destination: " + destination);
+                String.format("Recorded Trip #%d to %s with Boat #%d - Fuel Cost: P%,.2f",
+                        tripId, destination, boatId, fuelCost));
         return tripId;
     }
 
     /**
-     * Changes an ONGOING trip to COMPLETED or CANCELLED and frees the boat.
-     * Returns false if the trip does not exist, is not ONGOING, or the new status is not allowed.
+     * Moves an ONGOING trip to COMPLETED or CANCELLED, sets its return date and frees the boat.
+     * Returns false if the trip does not exist or is no longer ONGOING.
      */
-    public boolean updateTripStatus(int userId, int tripId, String newStatus) {
-        String target = newStatus == null ? "" : newStatus.trim().toUpperCase(Locale.ROOT);
-        if (!target.equals(Trip.STATUS_COMPLETED) && !target.equals(Trip.STATUS_CANCELLED)) {
-            return false;
-        }
-        String oldStatus = null;
+    public boolean updateTripStatus(int actingUserId, int tripId, String newStatus) {
+        String oldStatus;
         try (Connection conn = DatabaseConnection.getConnection()) {
             conn.setAutoCommit(false);
             try {
-                int boatId = 0;
+                int boatId;
                 try (PreparedStatement ps = conn.prepareStatement(
                         "SELECT boat_id, status FROM trips WHERE trip_id = ?")) {
                     ps.setInt(1, tripId);
                     try (ResultSet rs = ps.executeQuery()) {
-                        if (rs.next()) {
-                            boatId = rs.getInt("boat_id");
-                            oldStatus = rs.getString("status").toUpperCase(Locale.ROOT);
+                        if (!rs.next()) {
+                            conn.rollback();
+                            return false;
                         }
+                        boatId = rs.getInt("boat_id");
+                        oldStatus = rs.getString("status");
                     }
                 }
-                if (oldStatus == null || !oldStatus.equals(Trip.STATUS_ONGOING)) {
+                if (!Trip.STATUS_ONGOING.equalsIgnoreCase(oldStatus)) {
                     conn.rollback();
                     return false;
                 }
-
                 try (PreparedStatement ps = conn.prepareStatement(
-                        "UPDATE trips SET status = ?, return_date = datetime('now', 'localtime') "
-                                + "WHERE trip_id = ?")) {
-                    ps.setString(1, target);
+                        "UPDATE trips SET status = ?, return_date = datetime('now', 'localtime') WHERE trip_id = ?")) {
+                    ps.setString(1, newStatus.toUpperCase());
                     ps.setInt(2, tripId);
                     ps.executeUpdate();
                 }
-                setBoatStatus(conn, boatId, Boat.STATUS_AVAILABLE);
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "UPDATE boats SET status = ? WHERE boat_id = ?")) {
+                    ps.setString(1, Boat.STATUS_AVAILABLE);
+                    ps.setInt(2, boatId);
+                    ps.executeUpdate();
+                }
                 conn.commit();
             } catch (SQLException e) {
                 conn.rollback();
                 throw e;
-            } finally {
-                conn.setAutoCommit(true);
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Could not update the trip: " + e.getMessage(), e);
         }
-        activityLogDao.logAction(userId, ActivityLog.TRIP_STATUS_UPDATED,
-                "Updated Trip #" + tripId + " status from " + oldStatus + " to " + target);
+        activityLogDao.logAction(actingUserId, ActivityLog.TRIP_STATUS_UPDATED,
+                "Updated Trip #" + tripId + " status from " + oldStatus.toUpperCase()
+                        + " to " + newStatus.toUpperCase());
         return true;
     }
 
-    /** Every trip, newest first. */
     public List<Trip> getAllTrips() {
-        return query("SELECT " + COLUMNS + " FROM trips ORDER BY trip_id DESC", null, null);
+        return query("SELECT " + COLUMNS + " FROM trips ORDER BY trip_id DESC", null);
     }
 
-    /** Trips recorded by one captain, newest first. */
     public List<Trip> getTripsByCaptain(int captainId) {
-        return query("SELECT " + COLUMNS + " FROM trips WHERE captain_id = ? ORDER BY trip_id DESC",
-                captainId, null);
+        return query("SELECT " + COLUMNS + " FROM trips WHERE captain_id = ? ORDER BY trip_id DESC", captainId);
     }
 
-    /** One captain's trips that are still ONGOING. */
-    public List<Trip> getOngoingTripsByCaptain(int captainId) {
-        return query("SELECT " + COLUMNS + " FROM trips WHERE captain_id = ? AND UPPER(status) = ? "
-                + "ORDER BY trip_id DESC", captainId, Trip.STATUS_ONGOING);
-    }
-
-    private void setBoatStatus(Connection conn, int boatId, String status) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement("UPDATE boats SET status = ? WHERE boat_id = ?")) {
-            ps.setString(1, status);
-            ps.setInt(2, boatId);
-            ps.executeUpdate();
-        }
-    }
-
-    private List<Trip> query(String sql, Integer captainId, String status) {
+    private List<Trip> query(String sql, Integer param) {
         List<Trip> trips = new ArrayList<>();
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            int index = 1;
-            if (captainId != null) {
-                ps.setInt(index++, captainId);
-            }
-            if (status != null) {
-                ps.setString(index, status);
+            if (param != null) {
+                ps.setInt(1, param);
             }
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -175,7 +148,7 @@ public class TripDao {
             }
             return trips;
         } catch (SQLException e) {
-            throw new IllegalStateException("Could not load the trips: " + e.getMessage(), e);
+            throw new IllegalStateException("Could not load trips: " + e.getMessage(), e);
         }
     }
 }

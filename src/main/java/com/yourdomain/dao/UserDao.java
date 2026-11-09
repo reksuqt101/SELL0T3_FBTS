@@ -86,52 +86,56 @@ public class UserDao {
         return queryUsers(sql, User.STATUS_PENDING);
     }
 
-    /**
-     * Sets the target account's status to APPROVED and logs USER_APPROVED:
-     * "Admin [1] approved User [5]". Returns true if a row was updated.
-     */
-    public boolean approveUser(int adminId, int targetUserId) {
+    /** Sets the account's status from PENDING to APPROVED. Returns true if a row was updated. */
+    public boolean approveUser(int userId) {
         String sql = "UPDATE users SET status = 'APPROVED' WHERE id = ?";
-        boolean updated;
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, targetUserId);
-            updated = ps.executeUpdate() > 0;
+            ps.setInt(1, userId);
+            return ps.executeUpdate() > 0;
         } catch (SQLException e) {
             throw new IllegalStateException("Approval failed: " + e.getMessage(), e);
         }
-        if (updated) {
-            activityLogDao.logAction(adminId, ActivityLog.USER_APPROVED,
-                    "Admin [" + adminId + "] approved User [" + targetUserId + "]");
+    }
+
+    /** Approves a user and records who did it in the audit log. */
+    public boolean approveUser(int adminId, int userId) {
+        if (!approveUser(userId)) {
+            return false;
         }
-        return updated;
+        activityLogDao.logAction(adminId, ActivityLog.USER_APPROVED,
+                "Admin [" + activityLogDao.usernameOf(adminId) + "] approved account for User ["
+                        + activityLogDao.usernameOf(userId) + "]");
+        return true;
+    }
+
+    /** Updates a user's role and status and records who did it in the audit log. */
+    public boolean updateUserRoleAndStatus(int adminId, int userId, String newRole, String newStatus) {
+        if (!updateUserRoleAndStatus(userId, newRole, newStatus)) {
+            return false;
+        }
+        activityLogDao.logAction(adminId, ActivityLog.USER_UPDATED,
+                "Admin [" + activityLogDao.usernameOf(adminId) + "] changed User ["
+                        + activityLogDao.usernameOf(userId) + "] role to "
+                        + newRole.toUpperCase(Locale.ROOT) + ", status to " + newStatus.toUpperCase(Locale.ROOT));
+        return true;
     }
 
     /**
-     * Changes a user's role and status (saved in upper case) and logs USER_UPDATED:
-     * "Admin [1] changed User [5] role to BOAT CAPTAIN, status to APPROVED".
-     * Returns true if a row was updated.
+     * Changes a user's role and status. Both values are converted to upper case before
+     * they are saved. Returns true if a row was updated.
      */
-    public boolean updateUserRoleAndStatus(int adminId, int targetUserId, String newRole, String newStatus) {
-        String role = newRole.toUpperCase(Locale.ROOT);
-        String status = newStatus.toUpperCase(Locale.ROOT);
+    public boolean updateUserRoleAndStatus(int userId, String newRole, String newStatus) {
         String sql = "UPDATE users SET roles = ?, status = ? WHERE id = ?";
-        boolean updated;
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, role);
-            ps.setString(2, status);
-            ps.setInt(3, targetUserId);
-            updated = ps.executeUpdate() > 0;
+            ps.setString(1, newRole.toUpperCase(Locale.ROOT));
+            ps.setString(2, newStatus.toUpperCase(Locale.ROOT));
+            ps.setInt(3, userId);
+            return ps.executeUpdate() > 0;
         } catch (SQLException e) {
             throw new IllegalStateException("Update failed: " + e.getMessage(), e);
         }
-        if (updated) {
-            activityLogDao.logAction(adminId, ActivityLog.USER_UPDATED,
-                    "Admin [" + adminId + "] changed User [" + targetUserId + "] role to " + role
-                            + ", status to " + status);
-        }
-        return updated;
     }
 
     /** Runs a user SELECT with an optional single String parameter and maps the rows. */

@@ -11,8 +11,14 @@ import java.util.List;
 
 /**
  * All SQL for the activity_logs table (the audit trail). Every query uses a PreparedStatement.
+ * Reads join the users table so each entry carries the username, not just the user ID.
  */
 public class ActivityLogDao {
+
+    private static final String SELECT_WITH_USERNAME =
+            "SELECT l.log_id, l.user_id, COALESCE(u.username, '(deleted user)') AS username, "
+                    + "l.action_type, l.description, l.timestamp "
+                    + "FROM activity_logs l LEFT JOIN users u ON u.id = l.user_id ";
 
     /**
      * Records one action. A failure to write the log is reported but never thrown,
@@ -33,16 +39,26 @@ public class ActivityLogDao {
 
     /** Every log entry, newest first. */
     public List<ActivityLog> getAllLogs() {
-        String sql = "SELECT log_id, user_id, action_type, description, timestamp "
-                + "FROM activity_logs ORDER BY timestamp DESC, log_id DESC";
-        return query(sql, null);
+        return query(SELECT_WITH_USERNAME + "ORDER BY l.timestamp DESC, l.log_id DESC", null);
     }
 
     /** Log entries made by one user, newest first. */
     public List<ActivityLog> getLogsByUserId(int userId) {
-        String sql = "SELECT log_id, user_id, action_type, description, timestamp "
-                + "FROM activity_logs WHERE user_id = ? ORDER BY timestamp DESC, log_id DESC";
-        return query(sql, userId);
+        return query(SELECT_WITH_USERNAME + "WHERE l.user_id = ? ORDER BY l.timestamp DESC, l.log_id DESC", userId);
+    }
+
+    /** Turns a user ID into a username for log descriptions. Falls back to "User #id" if not found. */
+    public String usernameOf(int userId) {
+        String sql = "SELECT username FROM users WHERE id = ?";
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : "User #" + userId;
+            }
+        } catch (SQLException e) {
+            return "User #" + userId;
+        }
     }
 
     /** Deletes every log entry. Returns how many were removed. */
@@ -66,8 +82,8 @@ public class ActivityLogDao {
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     logs.add(new ActivityLog(rs.getInt("log_id"), rs.getInt("user_id"),
-                            rs.getString("action_type"), rs.getString("description"),
-                            rs.getString("timestamp")));
+                            rs.getString("username"), rs.getString("action_type"),
+                            rs.getString("description"), rs.getString("timestamp")));
                 }
             }
             return logs;

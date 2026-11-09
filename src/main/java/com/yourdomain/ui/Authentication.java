@@ -2,6 +2,7 @@ package com.yourdomain.ui;
 
 import com.yourdomain.dao.ActivityLogDao;
 import com.yourdomain.dao.UserDao;
+import com.yourdomain.model.ActivityLog;
 import com.yourdomain.model.User;
 
 import java.util.ArrayList;
@@ -143,7 +144,16 @@ public class Authentication {
             System.out.println("Your account is still PENDING approval by the administrator.");
             return;
         }
+        activityLogDao.logAction(user.id(), ActivityLog.USER_LOGIN,
+                "User " + user.username() + " (ID: " + user.id() + ") logged in.");
         routeToMenu(user);
+        logout(user);
+    }
+
+    /** Called when a role menu ends because the user logged out; writes the audit log entry. */
+    private void logout(User user) {
+        activityLogDao.logAction(user.id(), ActivityLog.USER_LOGOUT,
+                "User " + user.username() + " (ID: " + user.id() + ") logged out.");
     }
 
     /** Sends the logged-in user to the menu that matches their role. */

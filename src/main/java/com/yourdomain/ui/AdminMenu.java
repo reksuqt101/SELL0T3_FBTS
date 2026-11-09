@@ -22,9 +22,10 @@ public class AdminMenu {
     private static final String ROW_FORMAT = "| %-5s | %-15s | %-28s | %-10s |%n";
     private static final String BORDER = "+-------+-----------------+------------------------------+------------+";
 
-    // Audit log columns: ID, User ID, Action, Description, Timestamp.
-    private static final String LOG_ROW_FORMAT = "%-5s | %-8s | %-18s | %-35s | %-20s%n";
-    private static final String LOG_BORDER = "-".repeat(5 + 3 + 8 + 3 + 18 + 3 + 35 + 3 + 20);
+    // Audit log columns: ID, Username, Action, Description, Timestamp.
+    // The user column shows the username (width 15) instead of the bare user ID.
+    private static final String LOG_ROW_FORMAT = "%-5s | %-15s | %-18s | %-35s | %-20s%n";
+    private static final String LOG_BORDER = "-".repeat(5 + 3 + 15 + 3 + 18 + 3 + 35 + 3 + 20);
 
     private static final List<String> VALID_ROLES =
             List.of(User.ROLE_OWNER_ADMIN, User.ROLE_CAPTAIN, User.ROLE_CLERK);
@@ -273,7 +274,7 @@ public class AdminMenu {
                     if (boats.isEmpty()) {
                         System.out.println("No boats registered yet.");
                     } else {
-                        printBoatTable(boats);
+                        TableView.printBoats(boats);
                     }
                 }
                 case "2" -> registerBoat();
@@ -286,22 +287,22 @@ public class AdminMenu {
     private void registerBoat() {
         System.out.println();
         System.out.println("--- Register a New Boat ---");
-        String name = readText("Boat name (0 to cancel): ");
+        String name = InputHelper.readText(scanner, "Boat name (0 to cancel): ");
         if (name == null) {
             System.out.println("Registration cancelled.");
             return;
         }
-        String registration = readText("Registration number (0 to cancel): ");
+        String registration = InputHelper.readText(scanner, "Registration number (0 to cancel): ");
         if (registration == null) {
             System.out.println("Registration cancelled.");
             return;
         }
-        String type = readText("Boat type, e.g. Bangka (0 to cancel): ");
+        String type = InputHelper.readText(scanner, "Boat type, e.g. Bangka (0 to cancel): ");
         if (type == null) {
             System.out.println("Registration cancelled.");
             return;
         }
-        Double capacity = readPositiveDouble("Capacity in tons (0 to cancel): ");
+        Double capacity = InputHelper.readPositiveDouble(scanner, "Capacity in tons (0 to cancel): ");
         if (capacity == null) {
             System.out.println("Registration cancelled.");
             return;
@@ -315,61 +316,6 @@ public class AdminMenu {
         }
     }
 
-    // ---- boat helpers ----
-
-    private static final String BOAT_ROW = "| %-5s | %-20s | %-16s | %-12s | %-10s | %-10s |%n";
-    private static final String BOAT_BORDER =
-            "+-------+----------------------+------------------+--------------+------------+------------+";
-
-    private void printBoatTable(List<Boat> boats) {
-        System.out.println(BOAT_BORDER);
-        System.out.printf(BOAT_ROW, "ID", "Name", "Registration No.", "Type", "Capacity", "Status");
-        System.out.println(BOAT_BORDER);
-        for (Boat b : boats) {
-            System.out.printf(BOAT_ROW, b.boatId(), fit(b.boatName(), 20), fit(b.registrationNo(), 16),
-                    fit(b.boatType(), 12), String.format("%.1f", b.capacity()), fit(b.status(), 10));
-        }
-        System.out.println(BOAT_BORDER);
-        System.out.println("Total: " + boats.size());
-    }
-
-    /** Keeps asking until non-empty text is entered. Returns null if the person enters 0. */
-    private String readText(String prompt) {
-        while (true) {
-            System.out.print(prompt);
-            String input = scanner.nextLine().trim();
-            if (input.equals("0")) {
-                return null;
-            }
-            if (input.isEmpty()) {
-                System.out.println("This field cannot be empty.");
-                continue;
-            }
-            return input;
-        }
-    }
-
-    /** Keeps asking until a number greater than 0 is entered. Returns null if the person enters 0. */
-    private Double readPositiveDouble(String prompt) {
-        while (true) {
-            System.out.print(prompt);
-            String input = scanner.nextLine().trim();
-            if (input.equals("0")) {
-                return null;
-            }
-            try {
-                double value = Double.parseDouble(input);
-                if (Double.isNaN(value) || Double.isInfinite(value) || value <= 0) {
-                    System.out.println("Please enter a number greater than 0.");
-                    continue;
-                }
-                return value;
-            } catch (NumberFormatException e) {
-                System.out.println("Invalid input. Please enter a number.");
-            }
-        }
-    }
-
     // ---- audit logs ----
 
     /** Submenu for the audit trail: view all, filter by user, or clear. Enter 0 to go back. */
@@ -377,7 +323,7 @@ public class AdminMenu {
         boolean inAuditMenu = true;
         while (inAuditMenu) {
             System.out.println();
-            System.out.println("===== SYSTEM AUDIT LOGS =====");
+            System.out.println("===== ACTIVITY LOGGING, TRANSACTION HISTORY & SYSTEM-WIDE AUDIT TRAIL =====");
             System.out.println("1. View all system logs");
             System.out.println("2. Filter logs by user ID");
             System.out.println("3. Clear all logs");
@@ -394,7 +340,9 @@ public class AdminMenu {
         }
     }
 
+    /** Shows the user list so the admin can match IDs to usernames, then filters by the chosen ID. */
     private void filterLogsByUser() {
+        printUserTable(userDao.getAllUsers());
         int userId = readIntInput("Enter the User ID to filter by (0 to cancel): ");
         if (userId == 0) {
             System.out.println("Filter cancelled.");
@@ -419,7 +367,7 @@ public class AdminMenu {
         int removed = activityLogDao.clearLogs();
         System.out.println(removed + " log entries deleted.");
         activityLogDao.logAction(user.id(), ActivityLog.LOGS_CLEARED,
-                "Admin [" + user.id() + "] cleared " + removed + " log entries");
+                "Admin [" + user.username() + "] cleared " + removed + " log entries");
     }
 
     /** Splits text into lines of at most the given width, breaking at spaces where possible. */
@@ -446,11 +394,11 @@ public class AdminMenu {
             return;
         }
         System.out.println(LOG_BORDER);
-        System.out.printf(LOG_ROW_FORMAT, "ID", "User ID", "Action", "Description", "Timestamp");
+        System.out.printf(LOG_ROW_FORMAT, "ID", "Username", "Action", "Description", "Timestamp");
         System.out.println(LOG_BORDER);
         for (ActivityLog log : logs) {
             List<String> descriptionLines = wrap(log.description(), 35);
-            System.out.printf(LOG_ROW_FORMAT, log.logId(), log.userId(),
+            System.out.printf(LOG_ROW_FORMAT, log.logId(), fit(log.username(), 15),
                     fit(log.actionType(), 18), descriptionLines.get(0), fit(log.timestamp(), 20));
             // A long description continues on extra lines so no information is cut off.
             for (int i = 1; i < descriptionLines.size(); i++) {

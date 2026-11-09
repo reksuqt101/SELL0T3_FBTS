@@ -36,7 +36,7 @@ public class DatabaseInitializer {
                     departure_date TIMESTAMP NOT NULL,
                     return_date    TIMESTAMP,
                     fuel_cost      REAL,
-                    status         TEXT NOT NULL DEFAULT 'Ongoing',
+                    status         TEXT NOT NULL DEFAULT 'ONGOING',
                     FOREIGN KEY (boat_id)    REFERENCES boats(boat_id),
                     FOREIGN KEY (captain_id) REFERENCES users(id)
                 )
@@ -74,13 +74,14 @@ public class DatabaseInitializer {
                 action_type TEXT NOT NULL,
                 description TEXT NOT NULL,
                 timestamp   TIMESTAMP NOT NULL DEFAULT (datetime('now', 'localtime')),
-                FOREIGN KEY (user_id) REFERENCES users(id)
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """;
 
     /**
-     * Earlier versions created activity_logs with different columns (action, table_affected,
-     * record_id, log_time). If that old layout is found, move its rows into the new layout.
+     * Brings an older activity_logs table up to date and keeps its rows. Two older versions exist:
+     * the first had different columns (action, table_affected, record_id, log_time), and the
+     * second lacked ON DELETE CASCADE on the user_id foreign key.
      */
     private static void upgradeActivityLogsIfNeeded(Connection conn) throws SQLException {
         boolean hasNewLayout = false;
@@ -92,19 +93,32 @@ public class DatabaseInitializer {
                 }
             }
         }
-        if (hasNewLayout) {
+        boolean hasCascade = false;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(
+                     "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_logs'")) {
+            if (rs.next() && rs.getString(1) != null) {
+                hasCascade = rs.getString(1).toUpperCase().contains("ON DELETE CASCADE");
+            }
+        }
+        if (hasNewLayout && hasCascade) {
             return;
         }
+
+        String copySql = hasNewLayout
+                ? "INSERT INTO activity_logs (log_id, user_id, action_type, description, timestamp) "
+                + "SELECT log_id, user_id, action_type, description, timestamp FROM activity_logs_old"
+                : "INSERT INTO activity_logs (log_id, user_id, action_type, description, timestamp) "
+                + "SELECT log_id, user_id, action, "
+                + "COALESCE(table_affected || ' #' || record_id, table_affected, action), log_time "
+                + "FROM activity_logs_old";
 
         try (Statement stmt = conn.createStatement()) {
             conn.setAutoCommit(false);
             try {
                 stmt.execute("ALTER TABLE activity_logs RENAME TO activity_logs_old");
                 stmt.execute(ACTIVITY_LOGS_SQL);
-                stmt.execute("INSERT INTO activity_logs (log_id, user_id, action_type, description, timestamp) "
-                        + "SELECT log_id, user_id, action, "
-                        + "COALESCE(table_affected || ' #' || record_id, table_affected, action), log_time "
-                        + "FROM activity_logs_old");
+                stmt.execute(copySql);
                 stmt.execute("DROP TABLE activity_logs_old");
                 conn.commit();
             } catch (SQLException e) {
